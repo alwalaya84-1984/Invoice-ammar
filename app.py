@@ -1,35 +1,67 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from io import BytesIO
+from datetime import datetime
+import pytesseract
+from PIL import Image
+import re
 
-st.set_page_config(page_title="Invoice - Ammar", page_icon="🧾", layout="wide")
-
-SHIPPER_NAME = "Ammar"
-SHIPPER_CONTACT = "38488644"
+st.set_page_config(page_title="Invoice Generator", page_icon="🧾")
 
 st.title("🧾 Invoice Generator")
-st.caption(f"Prepared by: {SHIPPER_NAME} | Contact: +973 {SHIPPER_CONTACT}")
+st.caption("Prepared by: Ammar | Contact: +973 38488644")
 
-col1, col2 = st.columns(2)
-with col1:
-    inv_date = st.date_input("Date", value=date(2026, 2, 26))
-    inv_no = st.text_input("Invoice No.", "BC/22/02-2026")
-with col2:
-    consignee = st.text_area("Consignee", "M/S BLOOM SECURE CO. WLL\nMANAMA, BAHRAIN")
+uploaded_file = st.file_uploader("📸 ارفع صورة الفاتورة للقراءة التلقائية", type=["png", "jpg", "jpeg"])
 
-df = pd.DataFrame({
-    'ITEMS DESCRIPTION': ['Intelligent 4 Loop Fire Alarm Control Panel','Addressable Photo Electric Smoke Detector'],
-    'QTY': [1,225], 'UNIT PRICE USD': [750,14]
-})
-edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-edited_df['TOTAL USD'] = edited_df['QTY'] * edited_df['UNIT PRICE USD']
-total = edited_df['TOTAL USD'].sum()
-st.metric("TOTAL C & F USD", f"${total:,.2f}")
+def extract_from_image(image):
+    text = pytesseract.image_to_string(image)
+    date_match = re.search(r'(\d{2,4}[/-]\d{1,2}[/-]\d{1,2,4})', text)
+    invoice_match = re.search(r'(Invoice|INV)[\s#:]*([A-Z0-9/-]+)', text, re.I)
+    return {
+        'date': date_match.group(1) if date_match else datetime.now().strftime("%Y/%m/%d"),
+        'invoice': invoice_match.group(2) if invoice_match else "",
+        'raw_text': text
+    }
 
-if st.button("📥 Download Excel"):
-    with pd.ExcelWriter('Invoice.xlsx', engine='openpyxl') as writer:
-        edited_df.to_excel(writer, sheet_name='Items', index=False)
-    with open('Invoice.xlsx', 'rb') as f:
-        st.download_button('⬇️ تحميل الفاتورة', f, file_name=f'Invoice_{inv_no}.xlsx')
+if uploaded_file:
+    img = Image.open(uploaded_file)
+    st.image(img, caption="الصورة المرفوعة", width=300)
+    extracted = extract_from_image(img)
+    default_date = extracted['date']
+    default_invoice = extracted['invoice']
+    st.success("تم قراءة البيانات من الصورة. راجعها وعدل لو فيها خطأ")
+    with st.expander("النص المستخرج من الصورة"):
+        st.text(extracted['raw_text'])
+else:
+    default_date = datetime.now().strftime("%Y/%m/%d")
+    default_invoice = "BC/01/05-2026"
 
-st.caption(f"© 2026 {SHIPPER_NAME} | +973 {SHIPPER_CONTACT}")
+date = st.text_input("Date", value=default_date)
+invoice_no = st.text_input("Invoice No.", value=default_invoice)
+consignee = st.text_area("Consignee", value="M/S BLOOM SECURE CO. WLL\nMANAMA, BAHRAIN")
+
+st.subheader("Items")
+default_data = pd.DataFrame([
+    {"Item": "Alarm Control Panel", "QTY": 1, "UNIT PRICE USD": 750},
+])
+edited_df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
+
+if st.button("Generate Excel", type="primary"):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        header_df = pd.DataFrame([
+            ["Prepared by: Ammar | Contact: +973 38488644"],
+            ["Date:", date],
+            ["Invoice No.:", invoice_no],
+            ["Consignee:", consignee],
+            []
+        ])
+        header_df.to_excel(writer, index=False, header=False, startrow=0)
+        edited_df.to_excel(writer, index=False, startrow=6)
+    
+    st.download_button(
+        label="📥 Download Excel",
+        data=output.getvalue(),
+        file_name=f"{invoice_no}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
