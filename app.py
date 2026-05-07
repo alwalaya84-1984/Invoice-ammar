@@ -126,7 +126,9 @@ if st.button("Generate Invoice PDF", type="primary"):
     pdf.set_font("Arial", 'I', 10)
     pdf.cell(0, 8, "Prepared by: Ammar", 0, 1)
     
-    pdf_output = pdf.output(dest='S').encode('latin1')
+    # السطر المصحح حق fpdf2
+    pdf_output = bytes(pdf.output())
+    
     st.download_button(
         label="⬇️ Download PDF",
         data=pdf_output,
