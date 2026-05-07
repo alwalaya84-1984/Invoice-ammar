@@ -1,67 +1,135 @@
 import streamlit as st
-import pandas as pd
-from io import BytesIO
-from datetime import datetime
 import pytesseract
 from PIL import Image
 import re
+from fpdf import FPDF
+import datetime
 
-st.set_page_config(page_title="Invoice Generator", page_icon="🧾")
+# إعدادات الصفحة
+st.set_page_config(page_title="Invoice Generator", layout="wide")
+st.title("📄 Invoice Generator - Ammar")
 
-st.title("🧾 Invoice Generator")
-st.caption("Prepared by: Ammar | Contact: +973 38488644")
+# تهيئة الـ session state
+if 'invoice_no' not in st.session_state:
+    st.session_state.invoice_no = ""
+if 'date' not in st.session_state:
+    st.session_state.date = datetime.date.today().strftime("%d/%m/%Y")
+if 'consignee' not in st.session_state:
+    st.session_state.consignee = ""
+if 'description' not in st.session_state:
+    st.session_state.description = ""
+if 'qty' not in st.session_state:
+    st.session_state.qty = 1
+if 'unit_price' not in st.session_state:
+    st.session_state.unit_price = 0.0
+if 'total_amount' not in st.session_state:
+    st.session_state.total_amount = 0.0
 
-uploaded_file = st.file_uploader("📸 ارفع صورة الفاتورة للقراءة التلقائية", type=["png", "jpg", "jpeg"])
+# --- قسم قراءة الفاتورة من الصورة ---
+st.subheader("📸 ارفع صورة الفاتورة للقراءة التلقائية")
+uploaded_file = st.file_uploader("Upload", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
 
-def extract_from_image(image):
-    text = pytesseract.image_to_string(image)
-    date_match = re.search(r'(\d{2,4}[/-]\d{1,2}[/-]\d{1,2,4})', text)
-    invoice_match = re.search(r'(Invoice|INV)[\s#:]*([A-Z0-9/-]+)', text, re.I)
-    return {
-        'date': date_match.group(1) if date_match else datetime.now().strftime("%Y/%m/%d"),
-        'invoice': invoice_match.group(2) if invoice_match else "",
-        'raw_text': text
-    }
+if uploaded_file is not None:
+    try:
+        img = Image.open(uploaded_file)
+        st.image(img, caption="الفاتورة المرفوعة", use_column_width=True)
+        
+        with st.spinner('جاري قراءة الفاتورة...'):
+            # قراءة بدقة عالية للجداول
+            text = pytesseract.image_to_string(img, config='--psm 6')
+            
+            # 1. رقم الفاتورة
+            inv_no = re.search(r'Invoice No\s+([A-Z0-9-]+)', text, re.IGNORECASE)
+            if inv_no: 
+                st.session_state.invoice_no = inv_no.group(1)
+            
+            # 2. التاريخ
+            date = re.search(r'Date\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', text, re.IGNORECASE)
+            if date: 
+                st.session_state.date = date.group(1)
+            
+            # 3. اسم الزبون - يوقف عند Flag أو Building
+            consignee = re.search(r'Consignee\s*\n(.*?)(?:\nFlag:|\nBuilding:)', text, re.DOTALL | re.IGNORECASE)
+            if consignee: 
+                st.session_state.consignee = consignee.group(1).strip().replace('\n', ' ')
+            
+            # 4. الإجمالي
+            total = re.search(r'Total Price\s+\$?\s*([\d,]+\.?\d*)', text, re.IGNORECASE)
+            if total: 
+                st.session_state.total_amount = float(total.group(1).replace(',', ''))
+            
+            # 5. أول بند من الجدول للوصف والسعر
+            first_item = re.search(r'1\s+([A-Z0-9-]+\s+[A-Z\s]+.*?)\s+Ea\s+1\s+[\d.]+\s+([\d,]+\.?\d*)', text)
+            if first_item:
+                st.session_state.description = first_item.group(1).strip()
+                st.session_state.unit_price = float(first_item.group(2).replace(',', ''))
+                st.session_state.qty = 1
+                
+        st.success("✅ تمت القراءة! راجع البيانات تحت وعدل إذا احتجت")
+        
+    except Exception as e:
+        st.error(f"خطأ في القراءة: {e}")
 
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="الصورة المرفوعة", width=300)
-    extracted = extract_from_image(img)
-    default_date = extracted['date']
-    default_invoice = extracted['invoice']
-    st.success("تم قراءة البيانات من الصورة. راجعها وعدل لو فيها خطأ")
-    with st.expander("النص المستخرج من الصورة"):
-        st.text(extracted['raw_text'])
-else:
-    default_date = datetime.now().strftime("%Y/%m/%d")
-    default_invoice = "BC/01/05-2026"
+st.divider()
 
-date = st.text_input("Date", value=default_date)
-invoice_no = st.text_input("Invoice No.", value=default_invoice)
-consignee = st.text_area("Consignee", value="M/S BLOOM SECURE CO. WLL\nMANAMA, BAHRAIN")
+# --- قسم إدخال البيانات ---
+col1, col2 = st.columns(2)
 
-st.subheader("Items")
-default_data = pd.DataFrame([
-    {"Item": "Alarm Control Panel", "QTY": 1, "UNIT PRICE USD": 750},
-])
-edited_df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
+with col1:
+    st.subheader("Invoice Details")
+    st.session_state.invoice_no = st.text_input("Invoice No.", value=st.session_state.invoice_no)
+    st.session_state.date = st.text_input("Date", value=st.session_state.date)
+    st.session_state.consignee = st.text_area("Consignee", value=st.session_state.consignee, height=100)
 
-if st.button("Generate Excel", type="primary"):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        header_df = pd.DataFrame([
-            ["Prepared by: Ammar | Contact: +973 38488644"],
-            ["Date:", date],
-            ["Invoice No.:", invoice_no],
-            ["Consignee:", consignee],
-            []
-        ])
-        header_df.to_excel(writer, index=False, header=False, startrow=0)
-        edited_df.to_excel(writer, index=False, startrow=6)
+with col2:
+    st.subheader("Item Details")
+    st.session_state.description = st.text_input("Description", value=st.session_state.description)
+    st.session_state.qty = st.number_input("Quantity", value=int(st.session_state.qty), min_value=1)
+    st.session_state.unit_price = st.number_input("Unit Price USD", value=float(st.session_state.unit_price), format="%.2f")
+    st.session_state.total_amount = st.session_state.qty * st.session_state.unit_price
+    st.metric("Total Amount USD", f"{st.session_state.total_amount:,.2f}")
+
+# --- توليد PDF ---
+st.divider()
+if st.button("Generate Invoice PDF", type="primary"):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "COMMERCIAL INVOICE", 0, 1, 'C')
+    pdf.ln(10)
     
+    pdf.set_font("Arial", '', 12)
+    pdf.cell(0, 8, f"Invoice No: {st.session_state.invoice_no}", 0, 1)
+    pdf.cell(0, 8, f"Date: {st.session_state.date}", 0, 1)
+    pdf.multi_cell(0, 8, f"Consignee: {st.session_state.consignee}")
+    pdf.ln(5)
+    
+    # جدول البنود
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(100, 8, "Description", 1)
+    pdf.cell(20, 8, "Qty", 1)
+    pdf.cell(35, 8, "Unit Price", 1)
+    pdf.cell(35, 8, "Total", 1, 1)
+    
+    pdf.set_font("Arial", '', 11)
+    pdf.cell(100, 8, st.session_state.description[:50], 1)
+    pdf.cell(20, 8, str(st.session_state.qty), 1)
+    pdf.cell(35, 8, f"{st.session_state.unit_price:,.2f}", 1)
+    pdf.cell(35, 8, f"{st.session_state.total_amount:,.2f}", 1, 1)
+    
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(155, 8, "Total Amount USD:", 0, 0, 'R')
+    pdf.cell(35, 8, f"{st.session_state.total_amount:,.2f}", 1, 1)
+    
+    pdf.ln(10)
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(0, 8, "Prepared by: Ammar", 0, 1)
+    
+    pdf_output = pdf.output(dest='S').encode('latin1')
     st.download_button(
-        label="📥 Download Excel",
-        data=output.getvalue(),
-        file_name=f"{invoice_no}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        label="⬇️ Download PDF",
+        data=pdf_output,
+        file_name=f"Invoice_{st.session_state.invoice_no}.pdf",
+        mime="application/pdf"
     )
